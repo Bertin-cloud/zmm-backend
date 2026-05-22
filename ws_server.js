@@ -16,7 +16,7 @@ function broadcast(roomId, message, sender) {
 
   for (const client of clients) {
     if (client !== sender && client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(message));
+      client.send(message.toString());
     }
   }
 }
@@ -29,54 +29,38 @@ wss.on("connection", (ws, req) => {
     const roomId = url.searchParams.get("room");
     const token = url.searchParams.get("token");
 
-    // Validate request
     if (!roomId || !token) {
-      ws.close(1008, "Missing room or token");
+      ws.close();
       return;
     }
 
-    // Add client to room
     if (!rooms.has(roomId)) {
       rooms.set(roomId, []);
     }
 
     rooms.get(roomId).push(ws);
 
-    console.log(`Client joined room: ${roomId}`);
+    console.log("Client joined room:", roomId);
 
-    // Receive messages
     ws.on("message", (message) => {
-      try {
-        const data = JSON.parse(message.toString());
-
-        if (data.event) {
-          broadcast(roomId, data, ws);
-        }
-      } catch (err) {
-        console.error("Invalid message:", err.message);
-      }
+      broadcast(roomId, message, ws);
     });
 
-    // Remove client on disconnect
     ws.on("close", () => {
       const clients = rooms.get(roomId) || [];
-      rooms.set(
-        roomId,
-        clients.filter((client) => client !== ws)
-      );
-
-      console.log(`Client left room: ${roomId}`);
+      rooms.set(roomId, clients.filter(c => c !== ws));
     });
+
   } catch (err) {
-    console.error("Connection error:", err.message);
+    console.error("Connection error:", err);
     ws.close();
   }
 });
 
-// IMPORTANT: Render uses dynamic port
-const PORT = process.env.PORT || 8080;
+// IMPORTANT: Render PORT binding
+const PORT = process.env.PORT;
 
-// Start server
-server.listen(PORT, () => {
-  console.log(`WebSocket server running on port ${PORT}`);
+// MUST bind to 0.0.0.0 on Render
+server.listen(PORT, "0.0.0.0", () => {
+  console.log("WebSocket server running on port " + PORT);
 });
