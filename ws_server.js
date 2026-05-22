@@ -1,16 +1,25 @@
 const http = require("http");
 const WebSocket = require("ws");
 
-// Create HTTP server (REQUIRED for Render)
-const server = http.createServer();
+// Create HTTP server
+const server = http.createServer((req, res) => {
+  if (req.url === "/") {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("ZMM Backend is running 🚀");
+  } else if (req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok" }));
+  } else {
+    res.writeHead(404);
+    res.end("Not Found");
+  }
+});
 
-// Attach WebSocket server to HTTP server
+// Attach WebSocket server
 const wss = new WebSocket.Server({ server });
 
-// Store rooms
 const rooms = new Map();
 
-// Broadcast function
 function broadcast(roomId, message, sender) {
   const clients = rooms.get(roomId) || [];
 
@@ -21,46 +30,36 @@ function broadcast(roomId, message, sender) {
   }
 }
 
-// WebSocket connection
 wss.on("connection", (ws, req) => {
-  try {
-    const url = new URL(req.url, "http://localhost");
+  const url = new URL(req.url, "http://localhost");
 
-    const roomId = url.searchParams.get("room");
-    const token = url.searchParams.get("token");
+  const roomId = url.searchParams.get("room");
+  const token = url.searchParams.get("token");
 
-    if (!roomId || !token) {
-      ws.close();
-      return;
-    }
-
-    if (!rooms.has(roomId)) {
-      rooms.set(roomId, []);
-    }
-
-    rooms.get(roomId).push(ws);
-
-    console.log("Client joined room:", roomId);
-
-    ws.on("message", (message) => {
-      broadcast(roomId, message, ws);
-    });
-
-    ws.on("close", () => {
-      const clients = rooms.get(roomId) || [];
-      rooms.set(roomId, clients.filter(c => c !== ws));
-    });
-
-  } catch (err) {
-    console.error("Connection error:", err);
+  if (!roomId || !token) {
     ws.close();
+    return;
   }
+
+  if (!rooms.has(roomId)) {
+    rooms.set(roomId, []);
+  }
+
+  rooms.get(roomId).push(ws);
+
+  ws.on("message", (message) => {
+    broadcast(roomId, message, ws);
+  });
+
+  ws.on("close", () => {
+    const clients = rooms.get(roomId) || [];
+    rooms.set(roomId, clients.filter(c => c !== ws));
+  });
 });
 
-// IMPORTANT: Render PORT binding
+// IMPORTANT RENDER PORT
 const PORT = process.env.PORT;
 
-// MUST bind to 0.0.0.0 on Render
 server.listen(PORT, "0.0.0.0", () => {
-  console.log("WebSocket server running on port " + PORT);
+  console.log("Server running on port " + PORT);
 });
