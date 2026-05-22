@@ -1,0 +1,12 @@
+{
+  "name": "zmm-backend",
+  "version": "1.0.0",
+  "description": "ZMM backend websocket server",
+  "main": "ws_server.js",
+  "scripts": {
+    "start": "node ws_server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
