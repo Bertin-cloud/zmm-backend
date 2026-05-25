@@ -1,0 +1,4 @@
+node_modules/
+package-lock.json
+ws_test_output.txt
+.env
