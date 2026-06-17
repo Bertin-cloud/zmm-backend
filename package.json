@@ -1,0 +1,11 @@
+{
+  "name": "zmm-meeting-app",
+  "version": "1.0.0",
+  "description": "ZMM - Zoom Meeting Model",
+  "scripts": {
+    "backend": "cd backend && node server.js",
+    "frontend": "cd frontend && npm start",
+    "dev": "npm run backend & npm run frontend",
+    "install-all": "cd backend && npm install && cd ../frontend && npm install"
+  }
+}

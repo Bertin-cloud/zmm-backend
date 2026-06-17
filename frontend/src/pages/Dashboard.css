@@ -1,0 +1,35 @@
+.dashboard {
+  max-width: 1000px; margin: 0 auto; padding: 24px;
+  display: grid; grid-template-columns: 340px 1fr; gap: 20px;
+}
+@media (max-width: 700px) { .dashboard { grid-template-columns: 1fr; } }
+
+.dash-join h3, .card h3 { font-size: 16px; font-weight: 700; margin-bottom: 16px; }
+.join-form { display: flex; flex-direction: column; gap: 14px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+
+.quick-meetings { display: flex; flex-direction: column; gap: 8px; }
+.quick-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; background: var(--surface2); border-radius: 8px;
+  cursor: pointer; transition: all 0.2s; border: 1px solid transparent;
+}
+.quick-item:hover { border-color: var(--accent); background: rgba(59,130,246,0.05); }
+.quick-item:hover { background: rgba(255,122,24,0.08); }
+.quick-title { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+.quick-id { font-size: 12px; color: var(--accent); font-family: monospace; }
+
+.ann-item {
+  padding: 12px 0; border-bottom: 1px solid var(--border);
+}
+.ann-item:last-child { border-bottom: none; }
+.ann-item-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.ann-item-body { font-size: 13px; color: var(--text-muted); margin-bottom: 6px; line-height: 1.5; }
+.ann-item-date { font-size: 11px; color: var(--text-muted); opacity: 0.6; }
+
+.empty-text { color: var(--text-muted); font-size: 14px; text-align: center; padding: 20px; }
+
+.error-banner {
+  background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
+  color: var(--danger); padding: 10px 14px; font-size: 13px; border-radius: 8px;
+}

@@ -1,0 +1,23 @@
+{
+  "appId": "com.zm.meeting",
+  "appName": "ZM Meeting",
+  "webDir": "build",
+  "bundledWebRuntime": false,
+  "server": {
+    "url": "https://zmm-frontend.onrender.com",
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0
+    }
+  },
+  "android": {
+    "buildOptions": {
+      "releaseType": "APK"
+    }
+  },
+  "ios": {
+    "contentInsetAdjustmentBehavior": "automatic"
+  }
+}
