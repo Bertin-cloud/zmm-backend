@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "ZMM - Zoom Meeting Model",
   "scripts": {
+    "start": "cd backend && node server.js",
     "backend": "cd backend && node server.js",
     "frontend": "cd frontend && npm start",
     "dev": "npm run backend & npm run frontend",
