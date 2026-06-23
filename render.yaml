@@ -2,14 +2,7 @@ services:
   - type: web
     name: zmm-backend
     env: node
-    buildCommand: |
-      echo "Installing backend dependencies..."
-      cd backend && npm install
-      echo "Installing frontend dependencies..."
-      cd ../frontend && npm install
-      echo "Building frontend..."
-      npm run build
-      echo "Build complete"
+    buildCommand: npm --prefix backend install && npm --prefix frontend install && npm --prefix frontend run build
     startCommand: cd backend && node server.js
     envVars:
       - key: PORT
