@@ -2,7 +2,6 @@ services:
   - type: web
     name: zmm-backend
     env: node
-    rootDir: .
     buildCommand: |
       echo "Installing backend dependencies..."
       cd backend && npm install
