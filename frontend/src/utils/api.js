@@ -1,8 +1,8 @@
 import { io } from 'socket.io-client';
 
-export const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:4000/api';
+export const API_BASE = process.env.REACT_APP_API_URL || '/api';
 const BASE = API_BASE;
-const SOCKET_URL = BASE.replace(/\/api\/?$/, '');
+const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || (BASE.startsWith('http') ? BASE.replace(/\/api\/?$/, '') : '');
 
 let socket = null;
 // Singleton socket connection — created lazily on first use so pages that
@@ -18,7 +18,13 @@ async function apiFetch(path, options = {}, token = null) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, { ...options, headers: { ...headers, ...options.headers } });
-  const data = await res.json();
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (err) {
+    throw new Error(`Expected JSON from ${BASE}${path} but got HTML or invalid response: ${text.slice(0,200)}`);
+  }
   if (!res.ok) throw new Error(data.error || 'Request failed');
   return data;
 }
