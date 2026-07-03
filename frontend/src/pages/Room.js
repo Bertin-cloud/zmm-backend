@@ -552,7 +552,7 @@ export default function Room({ roomData, onLeave }) {
       token={token}
       serverUrl={effectiveRoomData.lkUrl}
       connect={true}
-      video={effectiveRoomData.role === 'host' || effectiveRoomData.role === 'cohost' ? { width: 1280, height: 720, frameRate: 30, simulcast: true } : { width: 640, height: 360, frameRate: 15, simulcast: true }}
+      video={{ width: 1280, height: 720, frameRate: 30, simulcast: true }}
       audio={{
         // Improve capture settings: keep echo/noise suppression enabled,
         // but disable automatic gain control (AGC) which often causes
