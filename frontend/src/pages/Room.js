@@ -141,6 +141,7 @@ function RoomContent({ roomData, onLeave }) {
   const participants = useParticipants();
   const [raiseHands, setRaiseHands] = useState({});
   const [waitingCount, setWaitingCount] = useState(0);
+  const [stats, setStats] = useState({ rtt: null, packetsLost: null, jitter: null });
 
   const localRole = roomData.role || 'participant';
   const isModerator = localRole === 'host' || localRole === 'cohost';
@@ -220,8 +221,8 @@ function RoomContent({ roomData, onLeave }) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const src = audioCtx.createMediaStreamSource(stream);
         const gainNode = audioCtx.createGain();
-        // modest boost (adjustable). Avoid > 3 to reduce clipping risk.
-        gainNode.gain.value = 1.6;
+          gainNode.gain.value = micBoost;
+          gainNodeRef.current = gainNode;
         const dest = audioCtx.createMediaStreamDestination();
         src.connect(gainNode);
         gainNode.connect(dest);
@@ -263,6 +264,104 @@ function RoomContent({ roomData, onLeave }) {
       if (audioCtx && audioCtx.state !== 'closed') audioCtx.close().catch(() => {});
     };
   }, [localParticipant]);
+
+    const [micBoost, setMicBoost] = useState(1.6);
+    const gainNodeRef = React.useRef(null);
+
+    // Update gain node when micBoost changes
+    useEffect(() => {
+      if (gainNodeRef.current) gainNodeRef.current.gain.value = micBoost;
+    }, [micBoost]);
+
+    // Try to prioritize Opus and set sender bitrate for audio senders.
+    useEffect(() => {
+      let cancelled = false;
+      async function tuneSenders() {
+        try {
+          if (!localParticipant) return;
+
+          // Attempt several paths to find the RTCPeerConnection used by LiveKit.
+          const maybeRoom = localParticipant?.room || localParticipant?._room || localParticipant?.roomName && window.livekitRoom;
+          const pc = maybeRoom?.pc || maybeRoom?.peerConnection || maybeRoom?.engine?.pc || maybeRoom?._pc || null;
+          // Fallback: some SDKs expose connection on participant.connection
+          const fallbackPc = localParticipant?.connection?.pc || null;
+          const peerConn = pc || fallbackPc;
+          if (!peerConn || typeof peerConn.getSenders !== 'function') return;
+
+          // Set codec preferences to Opus when possible, and increase maxBitrate.
+          const senders = peerConn.getSenders();
+          for (const sender of senders) {
+            if (!sender.track || sender.track.kind !== 'audio') continue;
+
+            // Set maxBitrate on encodings
+            try {
+              const params = sender.getParameters();
+              params.encodings = params.encodings && params.encodings.length ? params.encodings : [{}];
+              // 128 kbps is a good starting point for clear mono speech
+              params.encodings[0].maxBitrate = 128000;
+              await sender.setParameters(params);
+            } catch (e) {
+              // Ignore browsers that don't support setParameters.
+            }
+
+            // Prefer Opus via transceiver codec preferences when available
+            const transceivers = peerConn.getTransceivers ? peerConn.getTransceivers() : [];
+            for (const tr of transceivers) {
+              try {
+                if (tr.sender !== sender) continue;
+                if (typeof RTCRtpSender !== 'undefined' && typeof RTCRtpSender.getCapabilities === 'function' && typeof tr.setCodecPreferences === 'function') {
+                  const caps = RTCRtpSender.getCapabilities('audio');
+                  if (caps && caps.codecs) {
+                    const opus = caps.codecs.filter(c => c.mimeType && c.mimeType.toLowerCase().includes('opus'));
+                    if (opus.length) {
+                      tr.setCodecPreferences(opus);
+                    }
+                  }
+                }
+              } catch (e) {}
+            }
+          }
+        } catch (err) {
+          console.warn('Failed tuning RTCRtpSenders:', err);
+        }
+      }
+      if (!cancelled) tuneSenders();
+      return () => { cancelled = true; };
+    }, [localParticipant]);
+
+    // Simple stats polling for diagnostics (RTT, packet loss, jitter)
+    useEffect(() => {
+      let mounted = true;
+      let timer;
+      async function poll() {
+        try {
+          if (!localParticipant) return;
+          const maybeRoom = localParticipant?.room || localParticipant?._room || localParticipant?.roomName && window.livekitRoom;
+          const pc = maybeRoom?.pc || maybeRoom?.peerConnection || maybeRoom?.engine?.pc || maybeRoom?._pc || null;
+          const fallbackPc = localParticipant?.connection?.pc || null;
+          const peerConn = pc || fallbackPc;
+          if (!peerConn || typeof peerConn.getStats !== 'function') return;
+
+          const statsReport = await peerConn.getStats();
+          let rtt = null, packetsLost = null, jitter = null;
+          statsReport.forEach(r => {
+            if (!r) return;
+            if (!r.type) return;
+            if (r.type === 'candidate-pair' && r.nominated && (r.state === 'succeeded' || r.state === 'completed')) {
+              rtt = r.currentRoundTripTime != null ? r.currentRoundTripTime * 1000 : r.roundTripTime != null ? r.roundTripTime * 1000 : rtt;
+            }
+            if ((r.type === 'inbound-rtp' || r.type === 'remote-inbound-rtp') && r.kind === 'audio') {
+              if (r.packetsLost != null) packetsLost = r.packetsLost;
+              if (r.jitter != null) jitter = r.jitter;
+            }
+          });
+          if (mounted) setStats({ rtt, packetsLost, jitter });
+        } catch (e) {}
+        timer = setTimeout(poll, 2000);
+      }
+      poll();
+      return () => { mounted = false; if (timer) clearTimeout(timer); };
+    }, [localParticipant]);
 
   useEffect(() => {
     function onLocalModerationMute() {
@@ -398,6 +497,11 @@ function RoomContent({ roomData, onLeave }) {
               setRaiseHands(prev => ({ ...prev, [me]: true }));
             }
           }}>{raiseHands[localParticipant?.identity] ? '✋ Lower' : '✋ Raise'}</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '12px' }}>
+            <label style={{ fontSize: '12px' }}>Mic boost</label>
+            <input type="range" min="1" max="3" step="0.1" value={micBoost} onChange={e => setMicBoost(parseFloat(e.target.value))} />
+            <div style={{ fontSize: '12px', width: '110px' }}>RTT: {stats.rtt ? `${Math.round(stats.rtt)} ms` : '—'} • Loss: {stats.packetsLost ?? '—'}</div>
+          </div>
         </div>
       </div>
 
