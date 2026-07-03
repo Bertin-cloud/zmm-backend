@@ -60,3 +60,19 @@
   color: var(--danger); padding: 10px 16px; font-size: 13px; margin: 0 24px;
   border-radius: 8px;
 }
+
+@media (max-width: 720px) {
+  .landing { padding: 18px; }
+  .landing-header h1 { font-size: 32px; }
+  .landing-header p { font-size: 15px; }
+  .landing-card { max-width: 100%; }
+  .landing-form { padding: 18px; gap: 14px; }
+  .tab { padding: 12px 10px; font-size: 13px; }
+  .error-banner { margin: 0; }
+}
+
+@media (max-width: 520px) {
+  .landing { justify-content: flex-start; padding: 14px 12px 24px; }
+  .landing-header h1 { font-size: 28px; }
+  .landing-form { padding: 14px; }
+}

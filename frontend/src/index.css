@@ -53,6 +53,9 @@ input, textarea, select {
   color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 14px;
   transition: border-color 0.2s; outline: none;
 }
+
+img, video, iframe, canvas { max-width: 100%; height: auto; }
+button, input, textarea, select { min-width: 0; }
 input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
 input::placeholder { color: var(--text-muted); }
 

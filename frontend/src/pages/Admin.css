@@ -71,3 +71,18 @@
   border-radius: 10px; font-size: 14px; font-weight: 600;
   animation: slideUp 0.3s ease; box-shadow: 0 4px 20px rgba(34,197,94,0.4);
 }
+
+@media (max-width: 860px) {
+  .admin { padding: 16px; }
+  .admin-header { flex-direction: column; align-items: stretch; gap: 12px; }
+  .header-actions { justify-content: flex-start; flex-wrap: wrap; width: 100%; }
+  .admin-tabs { flex-wrap: wrap; gap: 8px; }
+  .meeting-card { flex-direction: column; align-items: flex-start; }
+  .meeting-actions { width: 100%; justify-content: flex-start; }
+  .meeting-actions .btn { flex: 1 1 auto; min-width: 120px; }
+  .modal { width: min(94vw, 420px); padding: 20px; }
+}
+
+@media (max-width: 520px) {
+  .meeting-actions .btn { width: 100%; }
+}
