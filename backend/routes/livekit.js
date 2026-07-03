@@ -1,12 +1,12 @@
 const express = require('express');
 const { AccessToken, RoomServiceClient } = require('livekit-server-sdk');
+const { authMiddleware, adminOnly, optionalAuth } = require('../middleware/auth');
 const router = express.Router();
 
 // In-memory promotion map: { roomName: { identity: 'cohost' } }
 const promotions = {};
 
 // RoomService client for admin actions (kick/mute/etc.)
-// Lazy initialization - only create when needed
 let roomService = null;
 
 function getRoomService() {
@@ -21,16 +21,37 @@ function getRoomService() {
   return roomService;
 }
 
-// Generate LiveKit token for any participant
-router.post('/token', async (req, res) => {
+// Only the platform admin (there's one: the meeting owner) is allowed to hold
+// host/cohost power. Everyone else — no matter what role they ask for in the
+// request body — is forced down to 'participant'. This is what actually
+// determines LiveKit permissions, so it can't be spoofed from the browser.
+function resolveRole(req, roomName, participantName, requestedRole) {
+  const isRealAdmin = req.user?.role === 'admin';
+
+  if (isRealAdmin) {
+    // The admin can join as host, or explicitly grant themself cohost.
+    return requestedRole === 'cohost' ? 'cohost' : 'host';
+  }
+
+  // Non-admins can only ever be 'participant', unless a host has explicitly
+  // promoted this exact identity to cohost via /promote (persisted below).
+  if (promotions[roomName] && promotions[roomName][participantName] === 'cohost') {
+    return 'cohost';
+  }
+  return 'participant';
+}
+
+// Generate LiveKit token for any participant.
+// optionalAuth: if the caller has a valid admin JWT, they can become host.
+// Everyone else is forced to 'participant' regardless of what they send.
+router.post('/token', optionalAuth, async (req, res) => {
   try {
     const { roomName, participantName, role } = req.body;
     if (!roomName || !participantName) {
       return res.status(400).json({ error: 'roomName and participantName required' });
     }
 
-    // consult promotions map to persist cohost role across reconnects
-    const assignedRole = role || (promotions[roomName] && promotions[roomName][participantName] ? promotions[roomName][participantName] : 'participant');
+    const assignedRole = resolveRole(req, roomName, participantName, role);
 
     const at = new AccessToken(
       process.env.LIVEKIT_API_KEY,
@@ -41,7 +62,9 @@ router.post('/token', async (req, res) => {
     at.addGrant({
       roomJoin: true,
       room: roomName,
-      canPublish: assignedRole === 'host' || assignedRole === 'cohost',
+      // Everyone can publish audio/video — this was the bug that broke
+      // participant mic/camera. Only moderation power (roomAdmin) stays host-only.
+      canPublish: true,
       canSubscribe: true,
       canPublishData: true,
       roomAdmin: assignedRole === 'host',
@@ -55,15 +78,14 @@ router.post('/token', async (req, res) => {
   }
 });
 
-// Promote a participant to cohost by minting a cohost token for them and persisting the role
-router.post('/promote', async (req, res) => {
+// Promote a participant to cohost — host/admin only.
+router.post('/promote', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { roomName, participantName } = req.body;
     if (!roomName || !participantName) {
       return res.status(400).json({ error: 'roomName and participantName required' });
     }
 
-    // persist promotion
     promotions[roomName] = promotions[roomName] || {};
     promotions[roomName][participantName] = 'cohost';
 
@@ -90,8 +112,9 @@ router.post('/promote', async (req, res) => {
   }
 });
 
-// Kick / remove a participant from a room (server-side admin action)
-router.post('/kick', async (req, res) => {
+// Kick / remove a participant — host/admin only. Previously had NO auth check
+// at all, which is how any participant could remove the host.
+router.post('/kick', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { roomName, participantName, revoke } = req.body;
     if (!roomName || !participantName) {
@@ -103,7 +126,6 @@ router.post('/kick', async (req, res) => {
       return res.status(500).json({ error: 'LiveKit service not configured' });
     }
 
-    // revoke=true will revoke tokens immediately by setting revokeTokenTs to current time
     const opts = {};
     if (revoke) opts.revokeTokenTs = Math.floor(Date.now() / 1000);
 
@@ -116,8 +138,8 @@ router.post('/kick', async (req, res) => {
   }
 });
 
-// Mute a participant's published microphone track through the server-side admin API
-router.post('/mute', async (req, res) => {
+// Mute a participant's mic — host/admin only. Same missing-auth bug as /kick.
+router.post('/mute', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { roomName, participantName, trackSid, muted } = req.body;
     if (!roomName || !participantName || !trackSid) {

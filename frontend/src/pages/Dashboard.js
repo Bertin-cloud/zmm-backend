@@ -22,16 +22,16 @@ export default function Dashboard({ onJoinRoom }) {
     e.preventDefault(); setLoading(true); setError('');
     try {
       const meeting = await api.joinMeeting(joinForm.meetingId.toUpperCase(), joinForm.password);
-      const lkData = await api.getLiveKitToken(meeting.meetingId, joinForm.displayName, 'host');
-      onJoinRoom({ ...meeting, displayName: joinForm.displayName, role: 'host', lkToken: lkData.token, lkUrl: lkData.url });
+      const lkData = await api.getLiveKitToken(meeting.meetingId, joinForm.displayName, 'host', token);
+      onJoinRoom({ ...meeting, displayName: joinForm.displayName, role: lkData.role, lkToken: lkData.token, lkUrl: lkData.url });
     } catch (err) { setError(err.message); }
     setLoading(false);
   }
 
   async function quickJoin(meeting) {
     try {
-      const lkData = await api.getLiveKitToken(meeting.meetingId, user.username, 'host');
-      onJoinRoom({ ...meeting, displayName: user.username, role: 'host', lkToken: lkData.token, lkUrl: lkData.url });
+      const lkData = await api.getLiveKitToken(meeting.meetingId, user.username, 'host', token);
+      onJoinRoom({ ...meeting, displayName: user.username, role: lkData.role, lkToken: lkData.token, lkUrl: lkData.url });
     } catch (err) { alert(err.message); }
   }
 

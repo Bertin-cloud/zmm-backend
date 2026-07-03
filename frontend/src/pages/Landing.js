@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLang } from '../context/LangContext';
 import { api } from '../utils/api';
+import WaitingRoom from '../components/WaitingRoom';
 import './Landing.css';
 
 export default function Landing({ onJoinRoom }) {
@@ -11,7 +12,19 @@ export default function Landing({ onJoinRoom }) {
   const [form, setForm] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [toast, setToast] = useState('');
+  // Once the guest has requested to join, we hold their pending request here
+  // and render the WaitingRoom screen instead of the form.
+  const [pendingRequest, setPendingRequest] = useState(null);
+
+  // If someone opened a shared meeting link (?join=MEETINGID), prefill the
+  // meeting ID so they just need to add their name and the password.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const joinId = params.get('join');
+    if (joinId) {
+      setForm(f => ({ ...f, meetingId: joinId.toUpperCase() }));
+    }
+  }, []);
 
   function set(k, v) { setForm(f => ({ ...f, [k]: v })); setError(''); }
 
@@ -24,16 +37,27 @@ export default function Landing({ onJoinRoom }) {
     setLoading(false);
   }
 
+  // Guests never choose a role and never get a token directly — they request
+  // to join, land in the waiting room, and only get a token once the host
+  // admits them (handled inside WaitingRoom via socket.io).
   async function handleJoin(e) {
     e.preventDefault(); setLoading(true); setError('');
     try {
-      const meeting = await api.joinMeeting(form.meetingId?.toUpperCase(), form.password);
-      const guestRole = form.role || 'participant';
       const name = form.displayName || 'Guest';
-      const lkData = await api.getLiveKitToken(meeting.meetingId, name, guestRole);
-      onJoinRoom({ ...meeting, displayName: name, role: guestRole, lkToken: lkData.token, lkUrl: lkData.url });
+      const result = await api.requestJoin(form.meetingId?.toUpperCase(), form.password, name);
+      setPendingRequest({ ...result, displayName: name });
     } catch (err) { setError(err.message); }
     setLoading(false);
+  }
+
+  if (pendingRequest) {
+    return (
+      <WaitingRoom
+        request={pendingRequest}
+        onAdmitted={(roomData) => onJoinRoom(roomData)}
+        onCancel={() => setPendingRequest(null)}
+      />
+    );
   }
 
   return (
@@ -83,16 +107,9 @@ export default function Landing({ onJoinRoom }) {
               <label>{t('displayName')}</label>
               <input placeholder={t('enterName')} value={form.displayName||''} onChange={e => set('displayName', e.target.value)} required />
             </div>
-            <div className="form-group">
-              <label>{t('host')} / {t('participant')}</label>
-              <select value={form.role||'participant'} onChange={e => set('role', e.target.value)}>
-                <option value="participant">{t('participant')}</option>
-                <option value="host">{t('host')}</option>
-                <option value="cohost">{t('cohost')}</option>
-              </select>
-            </div>
+            <p className="join-hint">{t('waitingRoomHint')}</p>
             <button className="btn btn-primary btn-lg" type="submit" disabled={loading} style={{width:'100%'}}>
-              {loading ? '...' : `🚀 ${t('join')}`}
+              {loading ? '...' : `🚀 ${t('askToJoin')}`}
             </button>
           </form>
         ) : (

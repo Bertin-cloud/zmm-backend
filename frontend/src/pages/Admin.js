@@ -59,8 +59,8 @@ export default function Admin({ onJoinRoom }) {
 
   async function hostJoin(meeting) {
     try {
-      const lkData = await api.getLiveKitToken(meeting.meetingId, user.username, 'host');
-      onJoinRoom({ ...meeting, displayName: user.username, role: 'host', lkToken: lkData.token, lkUrl: lkData.url });
+      const lkData = await api.getLiveKitToken(meeting.meetingId, user.username, 'host', token);
+      onJoinRoom({ ...meeting, displayName: user.username, role: lkData.role, lkToken: lkData.token, lkUrl: lkData.url });
     } catch (err) { alert(err.message); }
   }
 

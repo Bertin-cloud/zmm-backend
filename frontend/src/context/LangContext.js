@@ -23,6 +23,12 @@ const translations = {
     welcome: 'Welcome back', adminPanel: 'Admin Panel',
     guestJoin: 'Join as Guest', displayName: 'Display Name',
     wrongPassword: 'Wrong password', meetingNotFound: 'Meeting not found',
+    waitingRoom: 'Waiting Room', askToJoin: 'Ask to Join',
+    waitingRoomHint: "The host will let you in once they're ready.",
+    waitingForHost: 'Waiting for the host to let you in…',
+    waitingRoomAs: 'Joining as', cancel: 'Cancel', back: 'Back',
+    requestDenied: 'Request denied', requestDeniedHint: 'The host did not admit you to this meeting.',
+    admit: 'Admit', noOneWaiting: 'No one is waiting',
   },
   fr: {
     appName: 'ZMM', appTagline: 'Modèle de Réunion Zoom',
@@ -46,6 +52,12 @@ const translations = {
     welcome: 'Bon retour', adminPanel: 'Panneau admin',
     guestJoin: 'Rejoindre en invité', displayName: 'Nom affiché',
     wrongPassword: 'Mauvais mot de passe', meetingNotFound: 'Réunion introuvable',
+    waitingRoom: "Salle d'attente", askToJoin: 'Demander à rejoindre',
+    waitingRoomHint: "L'hôte vous laissera entrer dès qu'il sera prêt.",
+    waitingForHost: "En attente que l'hôte vous laisse entrer…",
+    waitingRoomAs: 'Rejoindre en tant que', cancel: 'Annuler', back: 'Retour',
+    requestDenied: 'Demande refusée', requestDeniedHint: "L'hôte ne vous a pas admis à cette réunion.",
+    admit: 'Admettre', noOneWaiting: "Personne n'attend",
   },
   rw: {
     appName: 'ZMM', appTagline: 'Sisitemu y\'Inama',
@@ -69,6 +81,12 @@ const translations = {
     welcome: 'Murakaza neza', adminPanel: 'Icyumba cy\'umuyobozi',
     guestJoin: 'Injira nk\'inshuti', displayName: 'Izina rigaragara',
     wrongPassword: 'Ijambo banga ritari ryo', meetingNotFound: 'Inama ntiboneka',
+    waitingRoom: 'Icyumba cyo Gutegereza', askToJoin: 'Saba kwinjira',
+    waitingRoomHint: 'Umutumizi azakwemerera kwinjira igihe azaba yiteguye.',
+    waitingForHost: 'Utegereje ko umutumizi akwemerera kwinjira…',
+    waitingRoomAs: 'Winjira nka', cancel: 'Kureka', back: 'Subira inyuma',
+    requestDenied: 'Icyifuzo cyanzwe', requestDeniedHint: 'Umutumizi ntabwo yakwemereye kwinjira muri iyi nama.',
+    admit: 'Emerera', noOneWaiting: 'Nta muntu utegereje',
   }
 };
 

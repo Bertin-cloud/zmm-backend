@@ -1,5 +1,7 @@
 require('dotenv').config();
 const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
 const cors = require('cors');
 const authRoutes = require('./routes/auth');
 const meetingRoutes = require('./routes/meetings');
@@ -24,6 +26,31 @@ app.use(cors({
   }
 }));
 app.use(express.json());
+
+// --- Real-time layer for the waiting room ---
+// Host joins a `host:{meetingId}` socket room to get live "someone wants in"
+// notifications. Each guest joins `request:{requestId}` so we can push their
+// admit/deny result straight to them instead of making them poll.
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) callback(null, true);
+      else callback(new Error('CORS not allowed'));
+    }
+  }
+});
+
+io.on('connection', (socket) => {
+  socket.on('host:watch', (meetingId) => {
+    if (meetingId) socket.join(`host:${meetingId}`);
+  });
+  socket.on('guest:watch', (requestId) => {
+    if (requestId) socket.join(`request:${requestId}`);
+  });
+});
+
+app.set('io', io);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/meetings', meetingRoutes);
@@ -80,6 +107,6 @@ console.log('- LIVEKIT_API_KEY:', process.env.LIVEKIT_API_KEY ? '✓ Set' : '✗
 console.log('- LIVEKIT_API_SECRET:', process.env.LIVEKIT_API_SECRET ? '✓ Set' : '✗ Missing');
 console.log('- JWT_SECRET:', process.env.JWT_SECRET ? '✓ Set' : '✗ Missing');
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`ZMM Backend running on http://localhost:${PORT}`);
 });

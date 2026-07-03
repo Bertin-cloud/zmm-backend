@@ -1,23 +1,16 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   LiveKitRoom,
   VideoConference,
   RoomAudioRenderer,
-  ControlBar,
-  useTracks,
-  TrackLoop,
-  TrackRefContext,
-  VideoTrack,
-  ParticipantTile,
   useParticipants,
   useLocalParticipant,
-  GridLayout,
-  FocusLayout,
   useTrackToggle,
   useDataChannel,
 } from '@livekit/components-react';
-import { Track } from 'livekit-client';
+import { useAuth } from '../context/AuthContext';
 import { useLang } from '../context/LangContext';
+import { api, getSocket, API_BASE } from '../utils/api';
 import Chat from '../components/Chat';
 import './Room.css';
 
@@ -53,15 +46,122 @@ function ParticipantList({ onAction, raiseHands, isModerator }) {
   );
 }
 
+// Host-only panel: shows people waiting to be let in, live, via socket.io.
+// Only rendered when isModerator is true, and every admit/deny call is sent
+// with the host's admin JWT so the backend can verify it's really them.
+function WaitingRoomPanel({ meetingId, isModerator }) {
+  const { t } = useLang();
+  const { token } = useAuth();
+  const [pending, setPending] = useState([]);
+  const [busyId, setBusyId] = useState(null);
+
+  useEffect(() => {
+    if (!isModerator || !token) return;
+    const socket = getSocket();
+    socket.emit('host:watch', meetingId);
+
+    api.getWaitingRoom(meetingId, token).then(setPending).catch(() => {});
+
+    function onNewRequest(req) {
+      if (req.meetingId !== meetingId) return;
+      setPending(prev => (prev.some(r => r.requestId === req.requestId) ? prev : [...prev, req]));
+    }
+    function onResolved({ requestId }) {
+      setPending(prev => prev.filter(r => r.requestId !== requestId));
+    }
+
+    socket.on('waiting-room:new-request', onNewRequest);
+    socket.on('waiting-room:resolved', onResolved);
+    return () => {
+      socket.off('waiting-room:new-request', onNewRequest);
+      socket.off('waiting-room:resolved', onResolved);
+    };
+  }, [meetingId, isModerator, token]);
+
+  if (!isModerator) return null;
+
+  async function admit(requestId) {
+    setBusyId(requestId);
+    try {
+      await api.admitGuest(meetingId, requestId, token);
+    } catch (err) {
+      console.warn('Admit failed', err);
+    }
+    setBusyId(null);
+  }
+
+  async function deny(requestId) {
+    setBusyId(requestId);
+    try {
+      await api.denyGuest(meetingId, requestId, token);
+    } catch (err) {
+      console.warn('Deny failed', err);
+    }
+    setBusyId(null);
+  }
+
+  return (
+    <div className="sidebar-section">
+      <div className="sidebar-title">🚪 {t('waitingRoom')} ({pending.length})</div>
+      {pending.length === 0 ? (
+        <p className="empty-text">{t('noOneWaiting')}</p>
+      ) : (
+        <div className="participant-list">
+          {pending.map(req => (
+            <div key={req.requestId} className="participant-item">
+              <div className="p-avatar">{req.displayName?.[0]?.toUpperCase()}</div>
+              <div style={{ flex: 1 }}>
+                <div className="p-name">{req.displayName}</div>
+              </div>
+              <div className="p-actions">
+                <button
+                  className="btn btn-success btn-xs"
+                  disabled={busyId === req.requestId}
+                  onClick={() => admit(req.requestId)}
+                >✔ {t('admit')}</button>
+                <button
+                  className="btn btn-ghost btn-xs"
+                  disabled={busyId === req.requestId}
+                  onClick={() => deny(req.requestId)}
+                >✕</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RoomContent({ roomData, onLeave }) {
   const { t } = useLang();
-  const [sidePanel, setSidePanel] = useState('participants'); // 'participants' | 'chat' | null
+  const { token } = useAuth();
+  const [sidePanel, setSidePanel] = useState('participants'); // 'participants' | 'chat' | 'waiting' | null
   const { localParticipant } = useLocalParticipant();
   const participants = useParticipants();
   const [raiseHands, setRaiseHands] = useState({});
+  const [waitingCount, setWaitingCount] = useState(0);
 
   const localRole = roomData.role || 'participant';
   const isModerator = localRole === 'host' || localRole === 'cohost';
+  const isHost = localRole === 'host';
+
+  // Track pending waiting-room count for the header badge, independent of
+  // which sidebar tab is open.
+  useEffect(() => {
+    if (!isHost || !token) return;
+    const socket = getSocket();
+    socket.emit('host:watch', roomData.meetingId);
+    api.getWaitingRoom(roomData.meetingId, token).then(list => setWaitingCount(list.length)).catch(() => {});
+    function onNew(req) { if (req.meetingId === roomData.meetingId) setWaitingCount(c => c + 1); }
+    function onResolved() { setWaitingCount(c => Math.max(0, c - 1)); }
+    socket.on('waiting-room:new-request', onNew);
+    socket.on('waiting-room:resolved', onResolved);
+    return () => {
+      socket.off('waiting-room:new-request', onNew);
+      socket.off('waiting-room:resolved', onResolved);
+    };
+  }, [isHost, token, roomData.meetingId]);
 
   // data channel for control signals (raise-hand, promote, moderation)
   const { send: sendSignal, message: signalMsg } = useDataChannel('signals', (msg) => {
@@ -73,11 +173,9 @@ function RoomContent({ roomData, onLeave }) {
       } else if (data.type === 'lower') {
         setRaiseHands(prev => ({ ...prev, [data.from]: false }));
       } else if (data.type === 'promote' && data.target === localParticipant?.identity) {
-        // if the server returned a token, update roomData via custom event
         window.dispatchEvent(new CustomEvent('lk-promotion', { detail: data.token }));
       } else if (data.type === 'moderation' && data.target === localParticipant?.identity) {
         if (data.action === 'mute') {
-          // try to mute local mic if available
           const ev = new CustomEvent('lk-moderation-mute');
           window.dispatchEvent(ev);
         } else if (data.action === 'kick') {
@@ -89,12 +187,82 @@ function RoomContent({ roomData, onLeave }) {
 
   useEffect(() => {
     if (!signalMsg) return;
-    // handled in callback above
   }, [signalMsg]);
 
   // toggles for local microphone and camera
   const { toggle: toggleMic, enabled: micEnabled, pending: micPending, buttonProps: micButtonProps } = useTrackToggle({ source: 'microphone' });
   const { toggle: toggleCam, enabled: camEnabled, pending: camPending, buttonProps: camButtonProps } = useTrackToggle({ source: 'camera' });
+
+  // Optional: try to replace the outgoing microphone track with a
+  // WebAudio-processed track (modest gain, AGC off). This is guarded and
+  // will silently no-op if the LiveKit client APIs are not available.
+  useEffect(() => {
+    let audioCtx;
+    let cancelled = false;
+    async function replaceMic() {
+      try {
+        if (!localParticipant || typeof navigator === 'undefined') return;
+        // feature-check LiveKit publish API
+        if (typeof localParticipant.publishTrack !== 'function') return;
+
+        // capture raw mic with AGC disabled so we can control gain ourselves
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: false,
+            sampleRate: 48000,
+            channelCount: 1,
+          }
+        });
+
+        if (cancelled) return;
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const src = audioCtx.createMediaStreamSource(stream);
+        const gainNode = audioCtx.createGain();
+        // modest boost (adjustable). Avoid > 3 to reduce clipping risk.
+        gainNode.gain.value = 1.6;
+        const dest = audioCtx.createMediaStreamDestination();
+        src.connect(gainNode);
+        gainNode.connect(dest);
+
+        const processedTrack = dest.stream.getAudioTracks()[0];
+        if (!processedTrack) return;
+
+        // Try to construct a LiveKit LocalAudioTrack if available and replace
+        // the published track. Use dynamic import so bundlers keep things OK.
+        const livekit = await import('livekit-client');
+        const LocalAudioTrack = livekit?.LocalAudioTrack || livekit?.createLocalAudioTrack;
+        if (!LocalAudioTrack) return;
+
+        let lkTrack;
+        if (typeof livekit.createLocalAudioTrack === 'function') {
+          // createLocalAudioTrack accepts constraints or an existing track
+          lkTrack = await livekit.createLocalAudioTrack({ track: processedTrack });
+        } else if (typeof livekit.LocalAudioTrack === 'function') {
+          lkTrack = new livekit.LocalAudioTrack(processedTrack);
+        }
+        if (!lkTrack) return;
+
+        // find current audio publication and attempt to unpublish it
+        const pubs = localParticipant.getTrackPublications ? localParticipant.getTrackPublications() : [];
+        for (const p of pubs) {
+          if (p.kind === 'audio' && p.track) {
+            try { await localParticipant.unpublishTrack(p.track); } catch (e) {}
+          }
+        }
+
+        await localParticipant.publishTrack(lkTrack);
+      } catch (err) {
+        console.warn('Processed mic replacement failed (safe to ignore):', err);
+      }
+    }
+    replaceMic();
+    return () => {
+      cancelled = true;
+      if (audioCtx && audioCtx.state !== 'closed') audioCtx.close().catch(() => {});
+    };
+  }, [localParticipant]);
 
   useEffect(() => {
     function onLocalModerationMute() {
@@ -105,56 +273,6 @@ function RoomContent({ roomData, onLeave }) {
     window.addEventListener('lk-local-moderation-mute', onLocalModerationMute);
     return () => window.removeEventListener('lk-local-moderation-mute', onLocalModerationMute);
   }, [micEnabled, toggleMic]);
-
-  // Disable any attached audio processors (krisp/enhanced noise) on local mic tracks
-  useEffect(() => {
-    if (!localParticipant) return;
-    const stopProcessors = async () => {
-      try {
-        const pubs = Array.from(localParticipant.audioTrackPublications ? localParticipant.audioTrackPublications.values() : []);
-        pubs.forEach(pub => {
-          const tr = pub.track;
-          if (tr) {
-            try {
-              if (typeof tr.stopProcessor === 'function') {
-                tr.stopProcessor(true);
-              }
-            } catch (e) {}
-            try {
-              if (typeof tr.internalStopProcessor === 'function') {
-                tr.internalStopProcessor(true);
-              }
-            } catch (e) {}
-            // prevent future processors being attached on this instance
-            try {
-              if (typeof tr.setProcessor === 'function') {
-                tr.setProcessor = async () => {};
-              }
-            } catch (e) {}
-          }
-        });
-      } catch (err) {
-        // ignore
-      }
-    };
-
-    stopProcessors();
-
-    const onLocalPublished = () => stopProcessors();
-    try {
-      localParticipant.on && localParticipant.on('localTrackPublished', onLocalPublished);
-      localParticipant.on && localParticipant.on('trackProcessorUpdate', onLocalPublished);
-      localParticipant.on && localParticipant.on('TrackProcessorUpdate', onLocalPublished);
-    } catch (e) {}
-
-    return () => {
-      try {
-        localParticipant.off && localParticipant.off('localTrackPublished', onLocalPublished);
-        localParticipant.off && localParticipant.off('trackProcessorUpdate', onLocalPublished);
-        localParticipant.off && localParticipant.off('TrackProcessorUpdate', onLocalPublished);
-      } catch (e) {}
-    };
-  }, [localParticipant]);
 
   return (
     <div className="room-layout">
@@ -171,6 +289,12 @@ function RoomContent({ roomData, onLeave }) {
           </div>
         </div>
         <div className="room-header-actions">
+          {isHost && (
+            <button className={`panel-btn ${sidePanel==='waiting'?'active':''}`} onClick={() => setSidePanel(s => s==='waiting'?null:'waiting')} style={{ position: 'relative' }}>
+              🚪
+              {waitingCount > 0 && <span className="panel-badge">{waitingCount}</span>}
+            </button>
+          )}
           <button className={`panel-btn ${sidePanel==='participants'?'active':''}`} onClick={() => setSidePanel(s => s==='participants'?null:'participants')}>
             👥
           </button>
@@ -191,17 +315,25 @@ function RoomContent({ roomData, onLeave }) {
 
         {sidePanel && (
           <div className="room-sidebar">
+            {sidePanel === 'waiting' && <WaitingRoomPanel meetingId={roomData.meetingId} isModerator={isHost} />}
             {sidePanel === 'participants' && <ParticipantList raiseHands={raiseHands} isModerator={isModerator} onAction={(action, target) => {
               const me = localParticipant?.identity;
               const participant = participants.find(p => p.identity === target);
               const micPub = participant?.getTrackPublication?.('microphone');
               const trackSid = micPub?.trackSid;
 
+              // Moderation endpoints now require the host's admin JWT — sending
+              // it here is what makes /kick and /mute actually work again
+              // (and what stops a participant from calling them at all, since
+              // participants never hold this token).
               const safeFetch = async (url, payload) => {
                 try {
                   await fetch(url, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                      'Content-Type': 'application/json',
+                      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                    },
                     body: JSON.stringify(payload),
                   });
                 } catch (err) {
@@ -217,14 +349,21 @@ function RoomContent({ roomData, onLeave }) {
                 setRaiseHands(prev => ({ ...prev, [target]: false }));
               } else if (action === 'mute') {
                 if (trackSid) {
-                  safeFetch('/api/livekit/mute', { roomName: roomData.meetingId, participantName: target, trackSid, muted: true });
+                  safeFetch(`${API_BASE}/livekit/mute`, { roomName: roomData.meetingId, participantName: target, trackSid, muted: true });
                 }
                 sendSignal(new TextEncoder().encode(JSON.stringify({ type: 'moderation', action: 'mute', target })), { reliable: true });
               } else if (action === 'remove') {
-                safeFetch('/api/livekit/kick', { roomName: roomData.meetingId, participantName: target, revoke: true });
+                safeFetch(`${API_BASE}/livekit/kick`, { roomName: roomData.meetingId, participantName: target, revoke: true });
                 sendSignal(new TextEncoder().encode(JSON.stringify({ type: 'moderation', action: 'kick', target })), { reliable: true });
               } else if (action === 'promote') {
-                fetch('/api/livekit/promote', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ roomName: roomData.meetingId, participantName: target }) })
+                fetch(`${API_BASE}/livekit/promote`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                  },
+                  body: JSON.stringify({ roomName: roomData.meetingId, participantName: target })
+                })
                   .then(r => r.json())
                   .then(json => {
                     if (json?.token) {
@@ -249,7 +388,6 @@ function RoomContent({ roomData, onLeave }) {
             {camEnabled ? '📷 Video Off' : '📷 Video On'}
           </button>
           <button className="btn btn-ghost btn-sm" onClick={() => {
-            // raise/lower hand toggle
             const me = localParticipant?.identity;
             const currently = raiseHands[me];
             if (currently) {
@@ -269,8 +407,6 @@ function RoomContent({ roomData, onLeave }) {
 }
 
 export default function Room({ roomData, onLeave }) {
-  const { t } = useLang();
-
   const [token, setToken] = useState(roomData?.lkToken);
   const [currentRole, setCurrentRole] = useState(roomData?.role || 'participant');
   const effectiveRoomData = { ...roomData, role: currentRole };
@@ -284,11 +420,9 @@ export default function Room({ roomData, onLeave }) {
       }
     }
     function onModerationKick() {
-      // disconnect local participant
       onLeave();
     }
     function onModerationMute() {
-      // dispatch event to RoomContent to ensure mic is muted
       window.dispatchEvent(new CustomEvent('lk-local-moderation-mute'));
     }
     window.addEventListener('lk-promotion', onPromotion);
@@ -315,12 +449,22 @@ export default function Room({ roomData, onLeave }) {
       serverUrl={effectiveRoomData.lkUrl}
       connect={true}
       video={effectiveRoomData.role === 'host' || effectiveRoomData.role === 'cohost' ? { width: 1280, height: 720, frameRate: 30, simulcast: true } : { width: 640, height: 360, frameRate: 15, simulcast: true }}
-      audio={{ echoCancellation: false, noiseSuppression: false, autoGainControl: false }}
+      audio={{
+        // Improve capture settings: keep echo/noise suppression enabled,
+        // but disable automatic gain control (AGC) which often causes
+        // pumping, distortion and level instability. Request a 48kHz
+        // sample rate and mono channel for lower CPU and consistent
+        // encoding behavior.
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: false,
+        sampleRate: 48000,
+        channelCount: 1,
+      }}
       options={{
         adaptiveStream: true,
         dynacast: true,
         stopLocalTrackOnUnpublish: false,
-        webAudioMix: true,
         reconnectPolicy: {
           nextRetryDelayInMs: ({ retryCount }) => {
             if (retryCount >= 7) return null;

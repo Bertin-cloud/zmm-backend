@@ -23,6 +23,7 @@ function createMeeting({ title, password, hostId, type = 'main', parentId = null
     type,
     parentId,
     participants: [],
+    waitingRoom: [], // pending join requests: { requestId, displayName, requestedAt }
     createdAt: new Date().toISOString()
   };
   meetings.push(meeting);
@@ -52,7 +53,35 @@ function deleteMeeting(meetingId) {
   if (idx !== -1) meetings.splice(idx, 1);
 }
 
+// --- Waiting room ---
+
+function addWaitingRequest(meetingId, displayName) {
+  const meeting = getMeetingById(meetingId);
+  if (!meeting) return null;
+  const request = { requestId: uuidv4(), displayName, requestedAt: new Date().toISOString() };
+  meeting.waitingRoom.push(request);
+  return request;
+}
+
+function getWaitingRoom(meetingId) {
+  const meeting = getMeetingById(meetingId);
+  return meeting ? meeting.waitingRoom : [];
+}
+
+function findWaitingRequest(meetingId, requestId) {
+  const meeting = getMeetingById(meetingId);
+  if (!meeting) return null;
+  return meeting.waitingRoom.find(r => r.requestId === requestId) || null;
+}
+
+function removeWaitingRequest(meetingId, requestId) {
+  const meeting = getMeetingById(meetingId);
+  if (!meeting) return;
+  meeting.waitingRoom = meeting.waitingRoom.filter(r => r.requestId !== requestId);
+}
+
 module.exports = {
   findUser, createMeeting, getMeetingById,
-  getAllMeetings, createAnnouncement, getAnnouncements, deleteMeeting
+  getAllMeetings, createAnnouncement, getAnnouncements, deleteMeeting,
+  addWaitingRequest, getWaitingRoom, findWaitingRequest, removeWaitingRequest
 };

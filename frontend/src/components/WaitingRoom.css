@@ -1,0 +1,75 @@
+.waiting-room {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(1200px 600px at 15% -10%, rgba(255, 122, 24, 0.08), transparent 60%),
+    #060810;
+}
+
+.waiting-card {
+  background: rgba(16, 19, 32, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  padding: 40px 32px;
+  width: 100%;
+  max-width: 380px;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.waiting-card h2 {
+  font-family: 'Syne', sans-serif;
+  font-size: 20px;
+  margin: 6px 0 2px;
+  color: #e7eaf3;
+}
+
+.waiting-sub { color: #9aa2b8; font-size: 14px; margin: 0; }
+.waiting-meeting {
+  color: #ff9d4d;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 14px;
+}
+
+.waiting-spinner {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 122, 24, 0.2);
+  border-top-color: #ff7a18;
+  animation: waiting-spin 0.9s linear infinite;
+  margin-bottom: 8px;
+}
+@keyframes waiting-spin { to { transform: rotate(360deg); } }
+
+.waiting-denied-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #ff8a8a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.waiting-card .btn { margin-top: 16px; }
+
+.join-hint {
+  font-size: 12px;
+  color: var(--text-muted, #9aa2b8);
+  margin: -6px 0 2px;
+  line-height: 1.4;
+}
