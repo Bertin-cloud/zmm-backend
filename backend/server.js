@@ -9,22 +9,7 @@ const livekitRoutes = require('./routes/livekit');
 
 const app = express();
 
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:5173'
-];
-
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests without origin (same-origin requests)
-    // or from allowed development origins
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('CORS not allowed'));
-    }
-  }
-}));
+app.use(cors());
 app.use(express.json());
 
 // --- Real-time layer for the waiting room ---
@@ -34,10 +19,9 @@ app.use(express.json());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) callback(null, true);
-      else callback(new Error('CORS not allowed'));
-    }
+    origin: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: true,
   }
 });
 
@@ -72,6 +56,15 @@ if (fs.existsSync(buildPath)) {
 }
 
 app.use(express.static(buildPath));
+
+// Global error handler for JSON API routes
+app.use((err, req, res, next) => {
+  console.error('Unhandled server error:', err);
+  if (req.path.startsWith('/api/')) {
+    return res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
+  }
+  next(err);
+});
 
 // Fallback to index.html for React Router (SPA routing)
 app.use((req, res) => {
