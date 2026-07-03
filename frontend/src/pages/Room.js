@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   LiveKitRoom,
   VideoConference,
@@ -14,14 +14,39 @@ import { api, getSocket, API_BASE } from '../utils/api';
 import Chat from '../components/Chat';
 import './Room.css';
 
-function ParticipantList({ onAction, raiseHands, isModerator }) {
+function ParticipantList({ onAction, raiseHands, isModerator, localParticipant, micEnabled, camEnabled, micPending, camPending, toggleMic, toggleCam }) {
   const { t } = useLang();
-  const { localParticipant } = useLocalParticipant();
   const participants = useParticipants();
   return (
     <div className="sidebar-section">
       <div className="sidebar-title">👥 {t('participants')} ({participants.length})</div>
       <div className="participant-list">
+        <div className="participant-item local-participant">
+          <div className="p-avatar">{localParticipant?.identity[0]?.toUpperCase()}</div>
+          <div style={{ flex: 1 }}>
+            <div className="p-name">{localParticipant?.identity || 'You'}</div>
+            <div className="p-status">
+              <span>{micEnabled ? '🎤' : '🔇'}</span>
+              <span>{camEnabled ? '📷' : '🚫'}</span>
+            </div>
+          </div>
+          <div className="p-actions">
+            <button
+              className="btn btn-ghost btn-xs"
+              onClick={toggleMic}
+              disabled={micPending}
+            >
+              {micEnabled ? '🔇' : '🎤'}
+            </button>
+            <button
+              className="btn btn-ghost btn-xs"
+              onClick={toggleCam}
+              disabled={camPending}
+            >
+              {camEnabled ? '📷' : '📷'}
+            </button>
+          </div>
+        </div>
         {participants.map(p => (
           <div key={p.identity} className="participant-item">
             <div className="p-avatar">{p.identity[0]?.toUpperCase()}</div>
@@ -146,10 +171,184 @@ function RoomContent({ roomData, onLeave }) {
   const [waitingCount, setWaitingCount] = useState(0);
   const [stats, setStats] = useState({ rtt: null, packetsLost: null, jitter: null });
   const [remoteRequest, setRemoteRequest] = useState('');
+  const [screenShareTrack, setScreenShareTrack] = useState(null);
+  const [sharePending, setSharePending] = useState(false);
+  const [screenShareError, setScreenShareError] = useState('');
+  const [endingMeeting, setEndingMeeting] = useState(false);
+  const [micPermissionError, setMicPermissionError] = useState('');
+  const [micPermissionDenied, setMicPermissionDenied] = useState(false);
+  const [backgroundMessage, setBackgroundMessage] = useState('');
+  const [hadActiveMediaBeforeHidden, setHadActiveMediaBeforeHidden] = useState({ mic: false, cam: false });
+  const [activeSpeaker, setActiveSpeaker] = useState('');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const videoContainerRef = useRef(null);
+
+  const isPermissionDeniedError = (err) => {
+    if (!err) return false;
+    const name = err.name || '';
+    const message = err.message || '';
+    return /NotAllowedError|PermissionDeniedError|NotReadableError|SecurityError/i.test(name)
+      || /permission/i.test(message);
+  };
+
+  const handleMicPermissionError = (err) => {
+    const denied = isPermissionDeniedError(err);
+    if (denied) {
+      setMicPermissionError('Microphone access is required to speak in this meeting. Please allow microphone access in your browser or device settings.');
+      setMicPermissionDenied(true);
+    } else {
+      setMicPermissionError('Unable to access the microphone. Please check your device settings and retry.');
+      setMicPermissionDenied(false);
+    }
+  };
+
+  async function retryMicrophone() {
+    if (!navigator?.mediaDevices?.getUserMedia) {
+      setMicPermissionError('Your browser does not support microphone capture on this device.');
+      setMicPermissionDenied(false);
+      return;
+    }
+
+    setMicPermissionError('');
+    setMicPermissionDenied(false);
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: false,
+          sampleRate: 48000,
+          channelCount: 1,
+        },
+      });
+      const track = stream.getAudioTracks()[0];
+      if (!track) throw new Error('No microphone track found');
+
+      const livekit = await import('livekit-client');
+      const lkTrack = livekit.createLocalAudioTrack
+        ? await livekit.createLocalAudioTrack({ track })
+        : new livekit.LocalAudioTrack(track);
+
+      await localParticipant?.publishTrack(lkTrack);
+      setMicPermissionError('');
+      setMicPermissionDenied(false);
+    } catch (err) {
+      handleMicPermissionError(err);
+      console.warn('Retry microphone failed:', err);
+    }
+  }
+
+  async function handleToggleMic() {
+    try {
+      await toggleMic();
+      if (micPermissionError) {
+        setMicPermissionError('');
+        setMicPermissionDenied(false);
+      }
+    } catch (err) {
+      handleMicPermissionError(err);
+    }
+  }
 
   const localRole = roomData.role || 'participant';
   const isModerator = localRole === 'host' || localRole === 'cohost';
   const isHost = localRole === 'host';
+
+  useEffect(() => {
+    const updateFullscreen = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', updateFullscreen);
+    return () => document.removeEventListener('fullscreenchange', updateFullscreen);
+  }, []);
+
+  useEffect(() => {
+    let timeout;
+    let lastHiddenState = false;
+
+    const restoreMediaIfNeeded = async () => {
+      if (!localParticipant) return;
+      if (hadActiveMediaBeforeHidden.mic && !micEnabled) {
+        try {
+          await toggleMic();
+        } catch (err) {
+          console.warn('Restore mic after background failed:', err);
+        }
+      }
+      if (hadActiveMediaBeforeHidden.cam && !camEnabled) {
+        try {
+          await toggleCam();
+        } catch (err) {
+          console.warn('Restore camera after background failed:', err);
+        }
+      }
+    };
+
+    const setHiddenState = () => {
+      if (document.visibilityState === 'hidden') {
+        setHadActiveMediaBeforeHidden({ mic: micEnabled, cam: camEnabled });
+        setBackgroundMessage('The meeting is in the background. Browser or OS restrictions may pause audio, video, or connection while your phone screen is off.');
+        lastHiddenState = true;
+      } else {
+        if (lastHiddenState) {
+          setBackgroundMessage('Meeting is active again. Restoring your audio/video streams if needed.');
+          restoreMediaIfNeeded();
+          timeout = window.setTimeout(() => setBackgroundMessage(''), 7000);
+        }
+        lastHiddenState = false;
+      }
+    };
+
+    const handleVisibility = () => setHiddenState();
+    const handleShow = () => setHiddenState();
+    const handleResume = () => setHiddenState();
+    const handleFocus = () => setHiddenState();
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pageshow', handleShow);
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('resume', handleResume);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pageshow', handleShow);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('resume', handleResume);
+      clearTimeout(timeout);
+    };
+  }, [localParticipant, micEnabled, camEnabled, toggleMic, toggleCam, hadActiveMediaBeforeHidden]);
+
+  useEffect(() => {
+    const updateSpeaker = () => {
+      const candidates = [...participants, localParticipant]
+        .filter(Boolean)
+        .map(p => ({
+          identity: p.identity,
+          level: p.audioLevel ?? 0,
+          speaking: p.isSpeaking ?? false,
+        }));
+
+      if (!candidates.length) {
+        setActiveSpeaker('');
+        return;
+      }
+
+      candidates.sort((a, b) => {
+        if (b.level !== a.level) return b.level - a.level;
+        return (b.speaking ? 1 : 0) - (a.speaking ? 1 : 0);
+      });
+
+      const winner = candidates[0];
+      if (winner && (winner.level > 0.05 || winner.speaking)) {
+        setActiveSpeaker(winner.identity);
+      } else {
+        setActiveSpeaker('');
+      }
+    };
+
+    updateSpeaker();
+    const timer = window.setInterval(updateSpeaker, 500);
+    return () => window.clearInterval(timer);
+  }, [participants, localParticipant]);
 
   // Track pending waiting-room count for the header badge, independent of
   // which sidebar tab is open.
@@ -190,6 +389,8 @@ function RoomContent({ roomData, onLeave }) {
         } else if (data.action === 'request-video') {
           window.dispatchEvent(new CustomEvent('lk-request-video'));
         }
+      } else if (data.type === 'moderation' && data.action === 'end-meeting') {
+        window.dispatchEvent(new CustomEvent('lk-end-meeting'));
       }
     } catch (e) {}
   });
@@ -263,6 +464,9 @@ function RoomContent({ roomData, onLeave }) {
 
         await localParticipant.publishTrack(lkTrack);
       } catch (err) {
+        if (isPermissionDeniedError(err)) {
+          handleMicPermissionError(err);
+        }
         console.warn('Processed mic replacement failed (safe to ignore):', err);
       }
     }
@@ -270,6 +474,80 @@ function RoomContent({ roomData, onLeave }) {
     return () => {
       cancelled = true;
       if (audioCtx && audioCtx.state !== 'closed') audioCtx.close().catch(() => {});
+    };
+  }, [localParticipant]);
+
+  const cameraTrackRef = React.useRef(null);
+  const cameraConstraints = {
+    facingMode: 'user',
+    width: { ideal: 1920, min: 1280 },
+    height: { ideal: 1080, min: 720 },
+    frameRate: { ideal: 30, max: 30 },
+    aspectRatio: 16 / 9,
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    async function replaceCam() {
+      try {
+        if (!localParticipant || typeof navigator === 'undefined') return;
+        if (typeof localParticipant.publishTrack !== 'function') return;
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: cameraConstraints,
+        });
+
+        if (cancelled) return;
+        const rawTrack = stream.getVideoTracks()[0];
+        if (!rawTrack) return;
+        if (rawTrack.applyConstraints) {
+          try {
+            await rawTrack.applyConstraints({ width: 1920, height: 1080, frameRate: 30 });
+          } catch (err) {
+            // ignore unsupported mobile constraints
+          }
+        }
+
+        const livekit = await import('livekit-client');
+        const LocalVideoTrack = livekit?.LocalVideoTrack || livekit?.createLocalVideoTrack;
+        if (!LocalVideoTrack) return;
+
+        let lkTrack;
+        if (typeof livekit.createLocalVideoTrack === 'function') {
+          lkTrack = await livekit.createLocalVideoTrack({ track: rawTrack });
+        } else {
+          lkTrack = new livekit.LocalVideoTrack(rawTrack);
+        }
+        if (!lkTrack) return;
+
+        const pubs = localParticipant.getTrackPublications ? localParticipant.getTrackPublications() : [];
+        for (const p of pubs) {
+          if (p.kind === 'video' && p.track) {
+            try { await localParticipant.unpublishTrack(p.track); } catch (e) {}
+          }
+        }
+
+        await localParticipant.publishTrack(lkTrack, {
+          simulcast: true,
+          videoEncoding: {
+            maxBitrate: 1800000,
+            scaleResolutionDownBy: 1,
+          }
+        });
+
+        cameraTrackRef.current?.stop?.();
+        cameraTrackRef.current = lkTrack;
+      } catch (err) {
+        console.warn('Mobile camera replacement failed:', err);
+      }
+    }
+
+    replaceCam();
+    return () => {
+      cancelled = true;
+      if (cameraTrackRef.current) {
+        cameraTrackRef.current.stop?.();
+      }
     };
   }, [localParticipant]);
 
@@ -281,52 +559,78 @@ function RoomContent({ roomData, onLeave }) {
       if (gainNodeRef.current) gainNodeRef.current.gain.value = micBoost;
     }, [micBoost]);
 
-    // Try to prioritize Opus and set sender bitrate for audio senders.
+    // Tune senders for audio/video bitrate and codec preferences.
     useEffect(() => {
       let cancelled = false;
       async function tuneSenders() {
         try {
           if (!localParticipant) return;
 
-          // Attempt several paths to find the RTCPeerConnection used by LiveKit.
           const maybeRoom = localParticipant?.room || localParticipant?._room || localParticipant?.roomName && window.livekitRoom;
           const pc = maybeRoom?.pc || maybeRoom?.peerConnection || maybeRoom?.engine?.pc || maybeRoom?._pc || null;
-          // Fallback: some SDKs expose connection on participant.connection
           const fallbackPc = localParticipant?.connection?.pc || null;
           const peerConn = pc || fallbackPc;
           if (!peerConn || typeof peerConn.getSenders !== 'function') return;
 
-          // Set codec preferences to Opus when possible, and increase maxBitrate.
           const senders = peerConn.getSenders();
-          for (const sender of senders) {
-            if (!sender.track || sender.track.kind !== 'audio') continue;
+          const transceivers = peerConn.getTransceivers ? peerConn.getTransceivers() : [];
 
-            // Set maxBitrate on encodings
+          for (const sender of senders) {
+            if (!sender.track) continue;
+            const kind = sender.track.kind;
             try {
               const params = sender.getParameters();
               params.encodings = params.encodings && params.encodings.length ? params.encodings : [{}];
-              // 128 kbps is a good starting point for clear mono speech
-              params.encodings[0].maxBitrate = 128000;
+
+              if (kind === 'audio') {
+                params.encodings[0].maxBitrate = 128000;
+                params.encodings[0].priority = 'high';
+              } else if (kind === 'video') {
+                const isScreenShare = sender.track.label?.toLowerCase().includes('screen') || sender.track.label?.toLowerCase().includes('display');
+                const videoBitrate = isScreenShare ? 1800000 : 1800000;
+                params.encodings[0].maxBitrate = videoBitrate;
+                params.encodings[0].minBitrate = 250000;
+                params.encodings[0].scaleResolutionDownBy = 1;
+              }
+
               await sender.setParameters(params);
             } catch (e) {
-              // Ignore browsers that don't support setParameters.
+              // Some browsers may not support setParameters for all tracks.
             }
+          }
 
-            // Prefer Opus via transceiver codec preferences when available
-            const transceivers = peerConn.getTransceivers ? peerConn.getTransceivers() : [];
-            for (const tr of transceivers) {
-              try {
-                if (tr.sender !== sender) continue;
-                if (typeof RTCRtpSender !== 'undefined' && typeof RTCRtpSender.getCapabilities === 'function' && typeof tr.setCodecPreferences === 'function') {
-                  const caps = RTCRtpSender.getCapabilities('audio');
-                  if (caps && caps.codecs) {
-                    const opus = caps.codecs.filter(c => c.mimeType && c.mimeType.toLowerCase().includes('opus'));
-                    if (opus.length) {
-                      tr.setCodecPreferences(opus);
-                    }
+          for (const tr of transceivers) {
+            try {
+              const track = tr.sender?.track;
+              if (!track) continue;
+              if (typeof RTCRtpSender === 'undefined' || typeof RTCRtpSender.getCapabilities !== 'function' || typeof tr.setCodecPreferences !== 'function') {
+                continue;
+              }
+
+              if (track.kind === 'audio') {
+                const caps = RTCRtpSender.getCapabilities('audio');
+                const opus = caps?.codecs?.filter(c => c.mimeType?.toLowerCase().includes('opus')) || [];
+                if (opus.length) {
+                  tr.setCodecPreferences(opus);
+                }
+              } else if (track.kind === 'video') {
+                const caps = RTCRtpSender.getCapabilities('video');
+                if (caps?.codecs?.length) {
+                  const preferred = caps.codecs.filter(c => /h264/i.test(c.mimeType));
+                  if (!preferred.length) {
+                    preferred.push(...caps.codecs.filter(c => /vp9/i.test(c.mimeType)));
+                  }
+                  if (!preferred.length) {
+                    preferred.push(...caps.codecs.filter(c => /vp8/i.test(c.mimeType)));
+                  }
+                  if (preferred.length) {
+                    const sorted = [...preferred, ...caps.codecs.filter(c => !preferred.includes(c))];
+                    tr.setCodecPreferences(sorted);
                   }
                 }
-              } catch (e) {}
+              }
+            } catch (e) {
+              // codec preference not supported by this browser
             }
           }
         } catch (err) {
@@ -372,6 +676,119 @@ function RoomContent({ roomData, onLeave }) {
     }, [localParticipant]);
 
   useEffect(() => {
+    if (!stats.rtt && stats.packetsLost == null && stats.jitter == null) return;
+    const isPoor = (stats.rtt ?? 0) > 250 || (stats.packetsLost ?? 0) > 5 || (stats.jitter ?? 0) > 0.1;
+    if (!localParticipant) return;
+
+    const maybeRoom = localParticipant?.room || localParticipant?._room || localParticipant?.roomName && window.livekitRoom;
+    const pc = maybeRoom?.pc || maybeRoom?.peerConnection || maybeRoom?.engine?.pc || maybeRoom?._pc || null;
+    const fallbackPc = localParticipant?.connection?.pc || null;
+    const peerConn = pc || fallbackPc;
+    if (!peerConn || typeof peerConn.getSenders !== 'function') return;
+
+    const senders = peerConn.getSenders();
+    for (const sender of senders) {
+      if (!sender.track || sender.track.kind !== 'video') continue;
+      try {
+        const params = sender.getParameters();
+        params.encodings = params.encodings && params.encodings.length ? params.encodings : [{}];
+        const settings = sender.track.getSettings ? sender.track.getSettings() : {};
+        const height = settings.height || settings.frameHeight || 720;
+        const minHeight = 360;
+        const downscale = isPoor ? Math.max(1, Math.min(3, Math.floor(height / minHeight))) : 1;
+        params.encodings[0].maxBitrate = isPoor ? 400000 : 900000;
+        params.encodings[0].scaleResolutionDownBy = downscale;
+        sender.setParameters(params).catch(() => {});
+      } catch (e) {
+        // ignore unsupported parameter changes
+      }
+    }
+  }, [stats, localParticipant]);
+
+  useEffect(() => {
+    async function tryEnableAudio() {
+      setRemoteRequest('Host requested you enable audio.');
+      if (micEnabled) return true;
+      try {
+        await toggleMic();
+        if (micEnabled) return true;
+      } catch (err) {
+        console.warn('Toggle mic failed:', err);
+      }
+
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        setRemoteRequest('Unable to access microphone.');
+        return false;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: false,
+            sampleRate: 48000,
+            channelCount: 1,
+          }
+        });
+        const track = stream.getAudioTracks()[0];
+        if (!track) throw new Error('No microphone track found');
+
+        const livekit = await import('livekit-client');
+        const lkTrack = livekit.createLocalAudioTrack
+          ? await livekit.createLocalAudioTrack({ track })
+          : new livekit.LocalAudioTrack(track);
+
+        await localParticipant?.publishTrack(lkTrack);
+        return true;
+      } catch (err) {
+        console.warn('Audio re-publish failed:', err);
+        handleMicPermissionError(err);
+        setRemoteRequest('Unable to enable audio. Please allow microphone access.');
+        return false;
+      }
+    }
+
+    async function tryEnableVideo() {
+      setRemoteRequest('Host requested you enable video.');
+      if (camEnabled) return true;
+      try {
+        await toggleCam();
+        if (camEnabled) return true;
+      } catch (err) {
+        console.warn('Toggle camera failed:', err);
+      }
+
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        setRemoteRequest('Unable to access camera.');
+        return false;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30, max: 30 },
+          }
+        });
+        const track = stream.getVideoTracks()[0];
+        if (!track) throw new Error('No camera track found');
+
+        const livekit = await import('livekit-client');
+        const lkTrack = livekit.createLocalVideoTrack
+          ? await livekit.createLocalVideoTrack({ track })
+          : new livekit.LocalVideoTrack(track);
+
+        await localParticipant?.publishTrack(lkTrack);
+        return true;
+      } catch (err) {
+        console.warn('Video re-publish failed:', err);
+        setRemoteRequest('Unable to enable video. Please allow camera access.');
+        return false;
+      }
+    }
+
     function onLocalModerationMute() {
       if (micEnabled) {
         toggleMic();
@@ -379,14 +796,12 @@ function RoomContent({ roomData, onLeave }) {
     }
     function onLocalRequestAudio() {
       if (!micEnabled) {
-        toggleMic();
-        setRemoteRequest('Host requested you enable audio.');
+        tryEnableAudio();
       }
     }
     function onLocalRequestVideo() {
       if (!camEnabled) {
-        toggleCam();
-        setRemoteRequest('Host requested you enable video.');
+        tryEnableVideo();
       }
     }
     window.addEventListener('lk-local-moderation-mute', onLocalModerationMute);
@@ -397,7 +812,136 @@ function RoomContent({ roomData, onLeave }) {
       window.removeEventListener('lk-request-audio', onLocalRequestAudio);
       window.removeEventListener('lk-request-video', onLocalRequestVideo);
     };
-  }, [micEnabled, toggleMic, camEnabled, toggleCam]);
+  }, [micEnabled, toggleMic, camEnabled, toggleCam, localParticipant]);
+
+  useEffect(() => {
+    function onLocalEndMeeting() {
+      setRemoteRequest('Host ended the meeting for everyone.');
+      onLeave();
+    }
+
+    window.addEventListener('lk-end-meeting', onLocalEndMeeting);
+    return () => {
+      window.removeEventListener('lk-end-meeting', onLocalEndMeeting);
+    };
+  }, [onLeave]);
+
+  useEffect(() => {
+    return () => {
+      if (screenShareTrack) {
+        localParticipant?.unpublishTrack(screenShareTrack).catch(() => {});
+        screenShareTrack.stop?.();
+      }
+    };
+  }, [localParticipant, screenShareTrack]);
+
+  function toggleFullScreen() {
+    const container = videoContainerRef.current;
+    if (!container) return;
+
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.().catch(() => {});
+    } else {
+      container.requestFullscreen?.().catch(() => {
+        if (typeof container.webkitRequestFullscreen === 'function') {
+          container.webkitRequestFullscreen();
+        }
+      });
+    }
+  }
+
+  async function toggleScreenShare() {
+    if (!localParticipant || typeof navigator === 'undefined') {
+      setScreenShareError('Screen sharing is not available in this browser.');
+      return;
+    }
+
+    if (sharePending) return;
+    setScreenShareError('');
+    setSharePending(true);
+
+    if (screenShareTrack) {
+      try {
+        await localParticipant.unpublishTrack(screenShareTrack);
+      } catch (err) {
+        console.warn('Unable to unpublish screen share track:', err);
+      }
+      screenShareTrack.stop?.();
+      setScreenShareTrack(null);
+      setSharePending(false);
+      return;
+    }
+
+    try {
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          frameRate: { ideal: 30, max: 60 },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          cursor: 'always',
+          displaySurface: 'browser',
+        },
+        audio: false,
+      });
+      const rawTrack = displayStream.getVideoTracks()[0];
+      if (!rawTrack) throw new Error('No display track available');
+      if (rawTrack.applyConstraints) {
+        try {
+          await rawTrack.applyConstraints({
+            width: 1920,
+            height: 1080,
+            frameRate: 30,
+          });
+        } catch (err) {
+          // ignore if the browser cannot apply additional constraints
+        }
+      }
+      rawTrack.contentHint = 'detail';
+
+      const livekit = await import('livekit-client');
+      const lkTrack = livekit.createLocalVideoTrack
+        ? await livekit.createLocalVideoTrack({ track: rawTrack })
+        : new livekit.LocalVideoTrack(rawTrack);
+
+      rawTrack.onended = async () => {
+        try {
+          await localParticipant.unpublishTrack(lkTrack);
+        } catch (err) {
+          console.warn('Failed to unpublish ended screen share track:', err);
+        }
+        setScreenShareTrack(null);
+      };
+
+      await localParticipant.publishTrack(lkTrack, {
+        simulcast: true,
+        videoEncoding: {
+          maxBitrate: 1800000,
+          scaleResolutionDownBy: 1,
+        },
+      });
+      setScreenShareTrack(lkTrack);
+    } catch (err) {
+      console.warn('Screen share failed:', err);
+      setScreenShareError(err?.message || 'Unable to start screen sharing.');
+    } finally {
+      setSharePending(false);
+    }
+  }
+
+  function endMeetingForAll() {
+    if (!window.confirm('End meeting for everyone?')) {
+      return;
+    }
+    setEndingMeeting(true);
+    try {
+      sendSignal(new TextEncoder().encode(JSON.stringify({ type: 'moderation', action: 'end-meeting' })), { reliable: true });
+    } catch (err) {
+      console.warn('End meeting signal failed:', err);
+    } finally {
+      setEndingMeeting(false);
+      onLeave();
+    }
+  }
 
   useEffect(() => {
     if (!remoteRequest) return;
@@ -435,6 +979,11 @@ function RoomContent({ roomData, onLeave }) {
           <button className="btn btn-danger btn-sm" onClick={onLeave}>
             📞 {t('leave')}
           </button>
+          {isHost && (
+            <button className="btn btn-danger btn-sm" onClick={endMeetingForAll} disabled={endingMeeting}>
+              🛑 {t('endMeeting')}
+            </button>
+          )}
         </div>
       </div>
       {remoteRequest && (
@@ -442,19 +991,68 @@ function RoomContent({ roomData, onLeave }) {
           {remoteRequest}
         </div>
       )}
+      {micPermissionError && (
+        <div className="room-permission-banner">
+          <div className="permission-message">{micPermissionError}</div>
+          <div className="permission-actions">
+            <button className="btn btn-primary btn-sm" onClick={retryMicrophone}>
+              Retry Microphone
+            </button>
+          </div>
+          {micPermissionDenied && (
+            <div className="permission-instructions">
+              <strong>Enable microphone access:</strong>
+              <ol>
+                <li>Open your browser's site settings for this meeting.</li>
+                <li>Allow microphone access for this website.</li>
+                <li>Reload the page if necessary.</li>
+                <li>Press Retry Microphone again.</li>
+              </ol>
+            </div>
+          )}
+        </div>
+      )}
+      {backgroundMessage && (
+        <div className="room-background-banner">
+          {backgroundMessage}
+        </div>
+      )}
 
       {/* Main area */}
       <div className="room-body">
-        <div className="room-video">
+        <div className="room-video" ref={videoContainerRef}>
+          <div className="video-toolbar">
+            <button className="btn btn-ghost btn-xs" onClick={toggleFullScreen}>
+              {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+            </button>
+            {activeSpeaker ? (
+              <div className="active-speaker-badge">🎙️ {activeSpeaker} is speaking</div>
+            ) : (
+              <div className="active-speaker-badge inactive">No active speaker</div>
+            )}
+          </div>
           <VideoConference />
         </div>
 
         {sidePanel && (
           <div className="room-sidebar">
+            <div className="sidebar-close-row">
+              <button className="sidebar-close" onClick={() => setSidePanel(null)} aria-label="Close panel">×</button>
+            </div>
             {sidePanel === 'waiting' && <WaitingRoomPanel meetingId={roomData.meetingId} isModerator={isHost} />}
-            {sidePanel === 'participants' && <ParticipantList raiseHands={raiseHands} isModerator={isModerator} onAction={(action, target) => {
-              const me = localParticipant?.identity;
-              const participant = participants.find(p => p.identity === target);
+            {sidePanel === 'participants' && <ParticipantList
+              raiseHands={raiseHands}
+              isModerator={isModerator}
+              localParticipant={localParticipant}
+              micEnabled={micEnabled}
+              camEnabled={camEnabled}
+              micPending={micPending}
+              camPending={camPending}
+              toggleMic={toggleMic}
+              toggleCam={toggleCam}
+              onAction={(action, target) => {
+                const me = localParticipant?.identity;
+                const participant = participants.find(p => p.identity === target);
               const micPub = participant?.getTrackPublication?.('microphone');
               const trackSid = micPub?.trackSid;
 
@@ -519,13 +1117,20 @@ function RoomContent({ roomData, onLeave }) {
         )}
       </div>
 
+      {screenShareError && (
+        <div className="room-error-banner">{screenShareError}</div>
+      )}
+
       <div className="room-controls">
         <div className="controls-inner">
-          <button className="btn btn-ghost btn-sm" onClick={() => toggleMic()} disabled={micPending} {...micButtonProps}>
+          <button className="btn btn-ghost btn-sm" onClick={handleToggleMic} disabled={micPending} {...micButtonProps}>
             {micEnabled ? '🔊 Mute' : '🔇 Unmute'}
           </button>
           <button className="btn btn-ghost btn-sm" onClick={() => toggleCam()} disabled={camPending} {...camButtonProps}>
             {camEnabled ? '📷 Video Off' : '📷 Video On'}
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={toggleScreenShare} disabled={sharePending}>
+            {screenShareTrack ? '🛑 Stop Share' : '🖥️ Share Screen'}
           </button>
           <button className="btn btn-ghost btn-sm" onClick={() => {
             const me = localParticipant?.identity;
@@ -593,7 +1198,14 @@ export default function Room({ roomData, onLeave }) {
       token={token}
       serverUrl={effectiveRoomData.lkUrl}
       connect={true}
-      video={{ width: 1280, height: 720, frameRate: 30, simulcast: true }}
+      video={{
+        facingMode: 'user',
+        width: { ideal: 1920, min: 1280 },
+        height: { ideal: 1080, min: 720 },
+        frameRate: { ideal: 30, max: 30 },
+        aspectRatio: 16 / 9,
+        simulcast: true,
+      }}
       audio={{
         // Improve capture settings: keep echo/noise suppression enabled,
         // but disable automatic gain control (AGC) which often causes
@@ -615,6 +1227,11 @@ export default function Room({ roomData, onLeave }) {
             if (retryCount >= 7) return null;
             return Math.min(500 * 2 ** retryCount, 10000);
           }
+        },
+        // Enable a higher default publish quality profile when available.
+        defaultPublishOptions: {
+          video: { simulcast: true, dtx: true },
+          audio: { opusStereo: false }
         }
       }}
       connectOptions={{
