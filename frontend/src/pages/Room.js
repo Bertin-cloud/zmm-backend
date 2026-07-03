@@ -263,59 +263,30 @@ function RoomContent({ roomData, onLeave }) {
 
   useEffect(() => {
     let timeout;
-    let lastHiddenState = false;
 
-    const restoreMediaIfNeeded = async () => {
-      if (!localParticipant) return;
-      if (hadActiveMediaBeforeHidden.mic && !micEnabled) {
-        try {
-          await toggleMic();
-        } catch (err) {
-          console.warn('Restore mic after background failed:', err);
-        }
-      }
-      if (hadActiveMediaBeforeHidden.cam && !camEnabled) {
-        try {
-          await toggleCam();
-        } catch (err) {
-          console.warn('Restore camera after background failed:', err);
-        }
-      }
-    };
-
-    const setHiddenState = () => {
+    const handleVisibility = async () => {
       if (document.visibilityState === 'hidden') {
         setHadActiveMediaBeforeHidden({ mic: micEnabled, cam: camEnabled });
         setBackgroundMessage('The meeting is in the background. Browser or OS restrictions may pause audio, video, or connection while your phone screen is off.');
-        lastHiddenState = true;
       } else {
-        if (lastHiddenState) {
-          setBackgroundMessage('Meeting is active again. Restoring your audio/video streams if needed.');
-          restoreMediaIfNeeded();
-          timeout = window.setTimeout(() => setBackgroundMessage(''), 7000);
-        }
-        lastHiddenState = false;
+        setBackgroundMessage('Meeting is active again. Restoring your audio/video streams if needed.');
+        timeout = window.setTimeout(() => setBackgroundMessage(''), 7000);
       }
     };
 
-    const handleVisibility = () => setHiddenState();
-    const handleShow = () => setHiddenState();
-    const handleResume = () => setHiddenState();
-    const handleFocus = () => setHiddenState();
-
     document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('pageshow', handleShow);
-    window.addEventListener('focus', handleFocus);
-    document.addEventListener('resume', handleResume);
+    window.addEventListener('pageshow', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+    document.addEventListener('resume', handleVisibility);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('pageshow', handleShow);
-      window.removeEventListener('focus', handleFocus);
-      document.removeEventListener('resume', handleResume);
+      window.removeEventListener('pageshow', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+      document.removeEventListener('resume', handleVisibility);
       clearTimeout(timeout);
     };
-  }, [localParticipant, micEnabled, camEnabled, toggleMic, toggleCam, hadActiveMediaBeforeHidden]);
+  }, [micEnabled, camEnabled]);
 
   useEffect(() => {
     const updateSpeaker = () => {
