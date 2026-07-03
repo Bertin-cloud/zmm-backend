@@ -76,6 +76,18 @@
   height: 100vh; gap: 16px; color: var(--text-muted);
 }
 
+.room-request-banner {
+  width: 100%;
+  background: rgba(59,130,246,0.12);
+  color: var(--text);
+  border: 1px solid rgba(59,130,246,0.22);
+  padding: 10px 16px;
+  text-align: center;
+  font-size: 13px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+}
+
 /* LiveKit overrides */
 .lk-room-container {
   height: 100%;

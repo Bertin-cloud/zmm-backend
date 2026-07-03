@@ -16,6 +16,7 @@ import './Room.css';
 
 function ParticipantList({ onAction, raiseHands, isModerator }) {
   const { t } = useLang();
+  const { localParticipant } = useLocalParticipant();
   const participants = useParticipants();
   return (
     <div className="sidebar-section">
@@ -32,12 +33,14 @@ function ParticipantList({ onAction, raiseHands, isModerator }) {
               </div>
             </div>
             <div className="p-actions">
-              {isModerator && raiseHands[p.identity] && (
+              {isModerator && p.identity !== localParticipant?.identity && raiseHands[p.identity] && (
                 <button className="btn btn-ghost btn-xs" onClick={() => onAction('lower', p.identity)}>👇</button>
               )}
-              {isModerator && <button className="btn btn-ghost btn-xs" onClick={() => onAction('mute', p.identity)}>🔇</button>}
-              {isModerator && <button className="btn btn-ghost btn-xs" onClick={() => onAction('remove', p.identity)}>❌</button>}
-              {isModerator && <button className="btn btn-ghost btn-xs" onClick={() => onAction('promote', p.identity)}>⭐</button>}
+              {isModerator && p.identity !== localParticipant?.identity && <button className="btn btn-ghost btn-xs" onClick={() => onAction('ask-audio', p.identity)} title="Ask participant to enable audio">🎧</button>}
+              {isModerator && p.identity !== localParticipant?.identity && <button className="btn btn-ghost btn-xs" onClick={() => onAction('ask-video', p.identity)} title="Ask participant to enable video">📷</button>}
+              {isModerator && p.identity !== localParticipant?.identity && <button className="btn btn-ghost btn-xs" onClick={() => onAction('mute', p.identity)}>🔇</button>}
+              {isModerator && p.identity !== localParticipant?.identity && <button className="btn btn-ghost btn-xs" onClick={() => onAction('remove', p.identity)}>❌</button>}
+              {isModerator && p.identity !== localParticipant?.identity && <button className="btn btn-ghost btn-xs" onClick={() => onAction('promote', p.identity)}>⭐</button>}
             </div>
           </div>
         ))}
@@ -142,6 +145,7 @@ function RoomContent({ roomData, onLeave }) {
   const [raiseHands, setRaiseHands] = useState({});
   const [waitingCount, setWaitingCount] = useState(0);
   const [stats, setStats] = useState({ rtt: null, packetsLost: null, jitter: null });
+  const [remoteRequest, setRemoteRequest] = useState('');
 
   const localRole = roomData.role || 'participant';
   const isModerator = localRole === 'host' || localRole === 'cohost';
@@ -181,6 +185,10 @@ function RoomContent({ roomData, onLeave }) {
           window.dispatchEvent(ev);
         } else if (data.action === 'kick') {
           window.dispatchEvent(new CustomEvent('lk-moderation-kick'));
+        } else if (data.action === 'request-audio') {
+          window.dispatchEvent(new CustomEvent('lk-request-audio'));
+        } else if (data.action === 'request-video') {
+          window.dispatchEvent(new CustomEvent('lk-request-video'));
         }
       }
     } catch (e) {}
@@ -369,9 +377,33 @@ function RoomContent({ roomData, onLeave }) {
         toggleMic();
       }
     }
+    function onLocalRequestAudio() {
+      if (!micEnabled) {
+        toggleMic();
+        setRemoteRequest('Host requested you enable audio.');
+      }
+    }
+    function onLocalRequestVideo() {
+      if (!camEnabled) {
+        toggleCam();
+        setRemoteRequest('Host requested you enable video.');
+      }
+    }
     window.addEventListener('lk-local-moderation-mute', onLocalModerationMute);
-    return () => window.removeEventListener('lk-local-moderation-mute', onLocalModerationMute);
-  }, [micEnabled, toggleMic]);
+    window.addEventListener('lk-request-audio', onLocalRequestAudio);
+    window.addEventListener('lk-request-video', onLocalRequestVideo);
+    return () => {
+      window.removeEventListener('lk-local-moderation-mute', onLocalModerationMute);
+      window.removeEventListener('lk-request-audio', onLocalRequestAudio);
+      window.removeEventListener('lk-request-video', onLocalRequestVideo);
+    };
+  }, [micEnabled, toggleMic, camEnabled, toggleCam]);
+
+  useEffect(() => {
+    if (!remoteRequest) return;
+    const timer = setTimeout(() => setRemoteRequest(''), 4000);
+    return () => clearTimeout(timer);
+  }, [remoteRequest]);
 
   return (
     <div className="room-layout">
@@ -405,6 +437,11 @@ function RoomContent({ roomData, onLeave }) {
           </button>
         </div>
       </div>
+      {remoteRequest && (
+        <div className="room-request-banner">
+          {remoteRequest}
+        </div>
+      )}
 
       {/* Main area */}
       <div className="room-body">
@@ -446,6 +483,10 @@ function RoomContent({ roomData, onLeave }) {
               } else if (action === 'lower') {
                 sendSignal(new TextEncoder().encode(JSON.stringify({ type: 'lower', from: target })), { reliable: true });
                 setRaiseHands(prev => ({ ...prev, [target]: false }));
+              } else if (action === 'ask-audio') {
+                sendSignal(new TextEncoder().encode(JSON.stringify({ type: 'moderation', action: 'request-audio', target })), { reliable: true });
+              } else if (action === 'ask-video') {
+                sendSignal(new TextEncoder().encode(JSON.stringify({ type: 'moderation', action: 'request-video', target })), { reliable: true });
               } else if (action === 'mute') {
                 if (trackSid) {
                   safeFetch(`${API_BASE}/livekit/mute`, { roomName: roomData.meetingId, participantName: target, trackSid, muted: true });
