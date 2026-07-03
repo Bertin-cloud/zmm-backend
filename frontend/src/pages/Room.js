@@ -178,7 +178,6 @@ function RoomContent({ roomData, onLeave }) {
   const [micPermissionError, setMicPermissionError] = useState('');
   const [micPermissionDenied, setMicPermissionDenied] = useState(false);
   const [backgroundMessage, setBackgroundMessage] = useState('');
-  const [hadActiveMediaBeforeHidden, setHadActiveMediaBeforeHidden] = useState({ mic: false, cam: false });
   const [activeSpeaker, setActiveSpeaker] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const videoContainerRef = useRef(null);
@@ -260,33 +259,6 @@ function RoomContent({ roomData, onLeave }) {
     document.addEventListener('fullscreenchange', updateFullscreen);
     return () => document.removeEventListener('fullscreenchange', updateFullscreen);
   }, []);
-
-  useEffect(() => {
-    let timeout;
-
-    const handleVisibility = async () => {
-      if (document.visibilityState === 'hidden') {
-        setHadActiveMediaBeforeHidden({ mic: micEnabled, cam: camEnabled });
-        setBackgroundMessage('The meeting is in the background. Browser or OS restrictions may pause audio, video, or connection while your phone screen is off.');
-      } else {
-        setBackgroundMessage('Meeting is active again. Restoring your audio/video streams if needed.');
-        timeout = window.setTimeout(() => setBackgroundMessage(''), 7000);
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('pageshow', handleVisibility);
-    window.addEventListener('focus', handleVisibility);
-    document.addEventListener('resume', handleVisibility);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('pageshow', handleVisibility);
-      window.removeEventListener('focus', handleVisibility);
-      document.removeEventListener('resume', handleVisibility);
-      clearTimeout(timeout);
-    };
-  }, [micEnabled, camEnabled]);
 
   useEffect(() => {
     const updateSpeaker = () => {
@@ -373,6 +345,24 @@ function RoomContent({ roomData, onLeave }) {
   // toggles for local microphone and camera
   const { toggle: toggleMic, enabled: micEnabled, pending: micPending, buttonProps: micButtonProps } = useTrackToggle({ source: 'microphone' });
   const { toggle: toggleCam, enabled: camEnabled, pending: camPending, buttonProps: camButtonProps } = useTrackToggle({ source: 'camera' });
+
+  // Detect when app goes to background or screen locks
+  useEffect(() => {
+    let timeout;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        setBackgroundMessage('The meeting is in the background. Browser or OS restrictions may pause audio, video, or connection while your phone screen is off.');
+      } else {
+        setBackgroundMessage('Meeting is active again.');
+        timeout = window.setTimeout(() => setBackgroundMessage(''), 3000);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearTimeout(timeout);
+    };
+  }, []);
 
   // Optional: try to replace the outgoing microphone track with a
   // WebAudio-processed track (modest gain, AGC off). This is guarded and
